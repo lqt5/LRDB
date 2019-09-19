@@ -55,9 +55,9 @@ class basic_server {
 
   /// @brief attach (or detach) for debug target
   /// @param lua_State*  debug target
-  void reset(lua_State* L = 0) {
+  void reset(lua_State* L = 0, bool shutdown = true) {
     debugger_.reset(L);
-    if (!L) {
+    if (!L && shutdown) {
       exit();
     }
   }
@@ -68,6 +68,11 @@ class basic_server {
     command_stream_.close();
   }
 
+  /// @brief Get lua debugger
+  debugger& get_debugger() {
+	  return debugger_;
+  }
+  
  private:
   void init() {
     debugger_.set_pause_handler([&](debugger&) {
@@ -78,12 +83,14 @@ class basic_server {
       send_notify(notify_message("running"));
     });
 
-    debugger_.set_tick_handler([&](debugger&) {
+    debugger_.set_tick_handler([&](debugger&, bool poll) {
       if (wait_for_connect_) {
         command_stream_.wait_for_connection();
-      }
-      command_stream_.poll();
-    });
+		command_stream_.poll();
+	  }
+	  if (poll)
+		  command_stream_.poll();
+	});
 
     command_stream_.on_connection = [=]() { connected_done(); };
     command_stream_.on_data = [=](const std::string& data) {

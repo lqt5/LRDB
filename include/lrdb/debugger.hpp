@@ -111,6 +111,16 @@ inline json::value to_json(lua_State* L, int index, int max_recursive = 1) {
       }
     }
     case LUA_TUSERDATA: {
+      // if (lua_getmetatable(L, index)) {
+      //   json::object v;
+      //   v["__meta"] = to_json(L, -1, max_recursive);  // return value to json
+      //   lua_pop(L, 1);
+      //   if (luaL_callmeta(L, index, "__tostring")) {
+      //   	v["__udata"] = to_json(L, -1, max_recursive);  // return value to json
+      //   	lua_pop(L, 1);  // pop return value and metatable
+      //   }
+      //   return json::value(v);
+      // }
       if (luaL_callmeta(L, index, "__tostring")) {
         json::value v = to_json(L, -1, max_recursive);  // return value to json
         lua_pop(L, 1);  // pop return value and metatable
@@ -133,7 +143,19 @@ inline json::value to_json(lua_State* L, int index, int max_recursive = 1) {
 #pragma warning(push)
 #pragma warning(disable : 4996)
 #endif
-      sprintf(buffer, "%s: %p", type, lua_topointer(L, index));
+      if (lua_isfunction(L, index)) {
+        lua_Debug ar;
+		memset(&ar, 0, sizeof(ar));
+		lua_pushvalue(L, index);
+		lua_getinfo(L, ">nS", &ar);
+		if (strcmp(ar.short_src, "[C]") == 0)
+		  snprintf(buffer, sizeof(buffer) - 1, "%s [C]:%p", type, lua_topointer(L, index));
+		else
+		  snprintf(buffer, sizeof(buffer) - 1, "%s [S]:%p:%s:%d", type, lua_topointer(L, index), ar.short_src, ar.lastlinedefined);
+	  }
+	  else {
+		sprintf(buffer, "%s: %p", type, lua_topointer(L, index));
+	  }
 #ifdef _MSC_VER
 #pragma warning(pop)
 #endif
@@ -612,7 +634,7 @@ class debugger {
  public:
   typedef std::vector<breakpoint_info> line_breakpoint_type;
   typedef std::function<void(debugger& debugger)> pause_handler_type;
-  typedef std::function<void(debugger& debugger)> tick_handler_type;
+  typedef std::function<void(debugger& debugger, bool poll)> tick_handler_type;
 
   debugger() : state_(0), pause_(true), step_type_(STEP_ENTRY) {}
   debugger(lua_State* L) : state_(0), pause_(true), step_type_(STEP_ENTRY) {
@@ -672,6 +694,12 @@ class debugger {
   /// @brief set tick handler. callback at new line,function call and function
   /// return.
   void set_tick_handler(tick_handler_type handler) { tick_handler_ = handler; }
+
+  void poll() {
+	  if (tick_handler_) {
+		  tick_handler_(*this, true);
+	  }
+  }
 
   /// @brief set pause handler. callback at paused by pause,step,breakpoint.
   /// If want continue pause,execute the loop so as not to return.
@@ -886,9 +914,9 @@ class debugger {
   void hookcall() {}
   void hookret() {}
 
-  void tick() {
+  void tick(bool poll) {
     if (tick_handler_) {
-      tick_handler_(*this);
+      tick_handler_(*this, poll);
     }
   }
   void check_code_step_pause() {
@@ -922,7 +950,7 @@ class debugger {
   void hook(lua_State* L, lua_Debug* ar) {
     current_debug_info_.assign(L, ar);
     current_breakpoint_ = 0;
-    tick();
+    tick(ar->event == LUA_HOOKCALL);
 
     if (!pause_ && ar->event == LUA_HOOKLINE) {
       check_code_step_pause();
